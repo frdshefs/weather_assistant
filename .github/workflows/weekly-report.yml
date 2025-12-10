@@ -2,8 +2,7 @@ name: Недельный отчет о погоде
 
 on:
   schedule:
-    # Каждое воскресенье в 19:00
-    - cron: '0 19 * * 0'
+    - cron: '0 19 * * 0'  # Каждое воскресенье в 19:00
   workflow_dispatch:
 
 jobs:
@@ -23,18 +22,17 @@ jobs:
             echo "has_data=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
+          
           COUNT=$(jq '.history | length' weather_history.json)
           if [ "$COUNT" -eq 0 ]; then
             echo "has_data=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          # Получаем статистику
+          
           AVG_TEMP=$(jq '[.history[].temp | tonumber] | add / length' weather_history.json)
           MAX_TEMP=$(jq '[.history[].temp | tonumber] | max' weather_history.json)
           MIN_TEMP=$(jq '[.history[].temp | tonumber] | min' weather_history.json)
-
+          
           echo "has_data=true" >> $GITHUB_OUTPUT
           echo "avg_temp=$AVG_TEMP" >> $GITHUB_OUTPUT
           echo "max_temp=$MAX_TEMP" >> $GITHUB_OUTPUT
@@ -48,23 +46,23 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            📊 *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ В КАЗАНИ*
+            📊 НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ В КАЗАНИ
 
-            *Статистика за ${{ steps.analyze_history.outputs.days_count }} дней:*
+            Статистика за ${{ steps.analyze_history.outputs.days_count }} дней:
             • Средняя температура: ${{ steps.analyze_history.outputs.avg_temp }}°C
             • Максимальная: ${{ steps.analyze_history.outputs.max_temp }}°C
             • Минимальная: ${{ steps.analyze_history.outputs.min_temp }}°C
 
-            *Период:* с $(date -d "7 days ago" +"%d.%m") по $(date +"%d.%m.%Y")
+            Период: с $(date -d "7 days ago" +"%d.%m") по $(date +"%d.%m.%Y")
 
-            *Рекомендация на следующую неделю:*
+            Рекомендация на следующую неделю:
             ${{ steps.analyze_history.outputs.avg_temp > 20 && '• Готовьте летние вещи! 👕' || '' }}
             ${{ steps.analyze_history.outputs.avg_temp < 10 && '• Не забудьте теплую одежду! 🧥' || '' }}
 
             Данные обновляются автоматически каждый день.
 
             Хорошей недели! 🌈
-          parse_mode: markdown
+          parse_mode: HTML
 
       - name: Сообщение если нет данных
         if: steps.analyze_history.outputs.has_data == 'false'
@@ -73,17 +71,17 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            📊 *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ*
+            📊 НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ
 
             Пока недостаточно данных для анализа.
 
-            *Что делать:*
+            Что делать:
             1. Запустите "Ежедневный прогноз погоды"
             2. Подождите несколько дней
             3. Отчет появится автоматически
 
-            *Как запустить:*
+            Как запустить:
             Actions → "Ежедневный прогноз погоды" → Run workflow
 
             Скоро будут данные! ⏳
-          parse_mode: markdown
+          parse_mode: HTML
