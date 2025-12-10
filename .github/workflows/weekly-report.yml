@@ -13,49 +13,32 @@ jobs:
       - name: Загружаем репозиторий
         uses: actions/checkout@v4
 
+      - name: Устанавливаем утилиты
+        run: sudo apt-get update && sudo apt-get install -y jq bc
+
       - name: Анализируем историю
         id: analyze_history
         run: |
-          # Проверяем, есть ли история
           if [ ! -f "weather_history.json" ]; then
-            echo "Нет данных для анализа" >> $GITHUB_STEP_SUMMARY
             echo "has_data=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
-          # Читаем историю
-          HISTORY_COUNT=$(jq -r '.history | length' weather_history.json)
-          if [ $HISTORY_COUNT -eq 0 ]; then
+
+          COUNT=$(jq '.history | length' weather_history.json)
+          if [ "$COUNT" -eq 0 ]; then
             echo "has_data=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
-          # Анализируем температуру
-          TEMPS=$(jq -r '.history[].temperature | tonumber' weather_history.json)
-          
-          # Вычисляем среднюю
-          TOTAL=0
-          COUNT=0
-          MAX=-100
-          MIN=100
-          
-          for temp in $TEMPS; do
-            TOTAL=$(echo "$TOTAL + $temp" | bc)
-            COUNT=$((COUNT + 1))
-            if (( $(echo "$temp > $MAX" | bc -l) )); then
-              MAX=$temp
-            fi
-            if (( $(echo "$temp < $MIN" | bc -l) )); then
-              MIN=$temp
-            fi
-          done
-          
-          AVG=$(echo "scale=1; $TOTAL / $COUNT" | bc)
-          
+
+          # Получаем статистику
+          AVG_TEMP=$(jq '[.history[].temp | tonumber] | add / length' weather_history.json)
+          MAX_TEMP=$(jq '[.history[].temp | tonumber] | max' weather_history.json)
+          MIN_TEMP=$(jq '[.history[].temp | tonumber] | min' weather_history.json)
+
           echo "has_data=true" >> $GITHUB_OUTPUT
-          echo "avg_temp=$AVG" >> $GITHUB_OUTPUT
-          echo "max_temp=$MAX" >> $GITHUB_OUTPUT
-          echo "min_temp=$MIN" >> $GITHUB_OUTPUT
+          echo "avg_temp=$AVG_TEMP" >> $GITHUB_OUTPUT
+          echo "max_temp=$MAX_TEMP" >> $GITHUB_OUTPUT
+          echo "min_temp=$MIN_TEMP" >> $GITHUB_OUTPUT
           echo "days_count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Отправляем недельный отчет
@@ -65,28 +48,21 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ* 📊
-            
-            Статистика за последние ${{ steps.analyze_history.outputs.days_count }} дней:
-            
-            *Температура:*
-            • Средняя: ${{ steps.analyze_history.outputs.avg_temp }}°C
+            📊 *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ В КАЗАНИ*
+
+            *Статистика за ${{ steps.analyze_history.outputs.days_count }} дней:*
+            • Средняя температура: ${{ steps.analyze_history.outputs.avg_temp }}°C
             • Максимальная: ${{ steps.analyze_history.outputs.max_temp }}°C
             • Минимальная: ${{ steps.analyze_history.outputs.min_temp }}°C
-            
+
             *Период:* с $(date -d "7 days ago" +"%d.%m") по $(date +"%d.%m.%Y")
-            
-            *Анализ:*
-            ${{ steps.analyze_history.outputs.avg_temp > 20 && '• Была теплая неделя 🌞' || '' }}
-            ${{ steps.analyze_history.outputs.avg_temp < 10 && steps.analyze_history.outputs.avg_temp > 0 && '• Была прохладная неделя 🍂' || '' }}
-            ${{ steps.analyze_history.outputs.avg_temp < 0 && '• Была холодная неделя ⛄' || '' }}
-            
+
             *Рекомендация на следующую неделю:*
             ${{ steps.analyze_history.outputs.avg_temp > 20 && '• Готовьте летние вещи! 👕' || '' }}
             ${{ steps.analyze_history.outputs.avg_temp < 10 && '• Не забудьте теплую одежду! 🧥' || '' }}
-            
-            Данные собираются автоматически каждый день в 7:00.
-            
+
+            Данные обновляются автоматически каждый день.
+
             Хорошей недели! 🌈
           parse_mode: markdown
 
@@ -97,17 +73,17 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ* 📊
-            
+            📊 *НЕДЕЛЬНЫЙ ОТЧЕТ О ПОГОДЕ*
+
             Пока недостаточно данных для анализа.
-            
+
             *Что делать:*
-            1. Запустите ежедневный прогноз погоды
+            1. Запустите "Ежедневный прогноз погоды"
             2. Подождите несколько дней
             3. Отчет появится автоматически
-            
+
             *Как запустить:*
-            В репозитории → Actions → "Ежедневный прогноз погоды" → Run workflow
-            
+            Actions → "Ежедневный прогноз погоды" → Run workflow
+
             Скоро будут данные! ⏳
           parse_mode: markdown
