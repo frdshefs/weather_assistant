@@ -1,0 +1,39 @@
+name: Обработка команд бота
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Команда от пользователя'
+        required: true
+        default: 'weather'
+      user_id:
+        description: 'ID пользователя'
+        required: true
+        default: '0'
+
+jobs:
+  handle-command:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Обрабатываем команду
+        run: |
+          echo "Пользователь ${{ github.event.inputs.user_id }} ввел: ${{ github.event.inputs.command }}"
+          
+          case "${{ github.event.inputs.command }}" in
+            "weather")
+              echo "Запускаем получение погоды..."
+              # Можно запустить daily-weather.yml
+              ;;
+            "alerts")
+              echo "Проверяем предупреждения..."
+              # Можно запустить weather-alerts.yml
+              ;;
+            "report")
+              echo "Генерируем отчет..."
+              # Можно запустить weekly-report.yml
+              ;;
+            "stop")
+              echo "Удаляем пользователя ${{ github.event.inputs.user_id }} из рассылки"
+              ;;
+          esac
