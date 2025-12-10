@@ -17,7 +17,7 @@ jobs:
       - name: Получаем текущую погоду
         id: current_weather
         env:
-          API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          API_KEY: ${{ secrets.WEATHER_API_KEY }}
           CITY_ID: ${{ secrets.CITY_ID }}
         run: |
           # Делаем запрос к OpenWeather API
