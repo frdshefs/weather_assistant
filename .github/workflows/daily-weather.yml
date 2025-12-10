@@ -1,32 +1,136 @@
-      - name: Получаем текущую погоду
-        id: current_weather
+name: Ежедневный прогноз погоды
+
+on:
+  schedule:
+    # Каждый день в 7:00 утра
+    - cron: '0 7 * * *'
+  workflow_dispatch: # Ручной запуск
+
+jobs:
+  get-weather:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загружаем репозиторий
+        uses: actions/checkout@v4
+
+      - name: Устанавливаем jq для работы с JSON
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Получаем погоду (Visual Crossing API)
+        id: weather
         env:
-          # ВАЖНО: Создайте секрет с этим именем в GitHub и поместите туда ваш ключ DVPQM9MXR9DG87G2S9YRJLZVD
-          WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
         run: |
-          # Делаем запрос к Visual Crossing API (используем metric для градусов Цельсия)
-          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?unitGroup=metric&include=current&key=$WEATHER_API_KEY&contentType=json&lang=ru")
+          # Делаем запрос к Visual Crossing API
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?unitGroup=metric&include=current&key=$VC_API_KEY&contentType=json&lang=ru")
 
-          # Извлекаем данные из ОТВЕТА Visual Crossing
-          TEMP=$(echo $RESPONSE | jq -r '.currentConditions.temp')
-          FEELS_LIKE=$(echo $RESPONSE | jq -r '.currentConditions.feelslike')
-          HUMIDITY=$(echo $RESPONSE | jq -r '.currentConditions.humidity')
-          WIND_SPEED=$(echo $RESPONSE | jq -r '.currentConditions.windspeed')
-          DESCRIPTION=$(echo $RESPONSE | jq -r '.currentConditions.conditions')
-          # Visual Crossing использует 'conditions' вместо 'main'
-          MAIN_WEATHER=$(echo $RESPONSE | jq -r '.currentConditions.conditions')
-          PRESSURE=$(echo $RESPONSE | jq -r '.currentConditions.pressure')
-          CITY_NAME="Казань" # Можно задать явно или получить из $RESPONSE (.resolvedAddress)
+          # Парсим данные из JSON-ответа Visual Crossing
+          TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
+          FEELS_LIKE=$(echo "$RESPONSE" | jq -r '.currentConditions.feelslike')
+          HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
+          WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
+          CONDITIONS=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
+          PRESSURE=$(echo "$RESPONSE" | jq -r '.currentConditions.pressure // "N/A"')
 
-          # Сохраняем в outputs
-          echo "city=$CITY_NAME" >> $GITHUB_OUTPUT
+          # Определяем рекомендацию по одежде
+          if (( $(echo "$TEMP >= 25" | bc -l) )); then
+            CLOTHING="очень жарко"
+          elif (( $(echo "$TEMP >= 18" | bc -l) )); then
+            CLOTHING="тепло"
+          elif (( $(echo "$TEMP >= 10" | bc -l) )); then
+            CLOTHING="прохладно"
+          elif (( $(echo "$TEMP >= 0" | bc -l) )); then
+            CLOTHING="холодно"
+          else
+            CLOTHING="очень холодно"
+          fi
+
+          # Определяем эмодзи и активность
+          case "$CONDITIONS" in
+            *Clear*|*Sunny*)
+              EMOJI="☀️"
+              ACTIVITY="прогулка в парке, пикник, велосипедная прогулка"
+              ;;
+            *Cloud*)
+              EMOJI="☁️"
+              ACTIVITY="посещение музея, чтение в кафе, шоппинг"
+              ;;
+            *Rain*|*Drizzle*)
+              EMOJI="🌧️"
+              ACTIVITY="домашний кинотеатр, приготовление выпечки, настольные игры"
+              ;;
+            *Snow*)
+              EMOJI="❄️"
+              ACTIVITY="катание на санках, построение снеговика, горячий шоколад"
+              ;;
+            *)
+              EMOJI="🌤️"
+              ACTIVITY="занятия дома, посещение бассейна, фитнес-зал"
+              ;;
+          esac
+
+          # Сохраняем данные для следующих шагов
           echo "temp=$TEMP" >> $GITHUB_OUTPUT
           echo "feels_like=$FEELS_LIKE" >> $GITHUB_OUTPUT
           echo "humidity=$HUMIDITY" >> $GITHUB_OUTPUT
           echo "wind_speed=$WIND_SPEED" >> $GITHUB_OUTPUT
-          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
-          echo "main_weather=$MAIN_WEATHER" >> $GITHUB_OUTPUT
+          echo "conditions=$CONDITIONS" >> $GITHUB_OUTPUT
           echo "pressure=$PRESSURE" >> $GITHUB_OUTPUT
+          echo "clothing=$CLOTHING" >> $GITHUB_OUTPUT
+          echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
+          echo "activity=$ACTIVITY" >> $GITHUB_OUTPUT
+
+      - name: Отправляем в Telegram
+        uses: appleboy/telegram-action@master
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        with:
+          to: ${{ env.TELEGRAM_CHAT_ID }}
+          token: ${{ env.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ${{ steps.weather.outputs.emoji }} *ПОГОДА В КАЗАНИ*
+
+            *Текущая погода:*
+            • Температура: ${{ steps.weather.outputs.temp }}°C
+            • Ощущается как: ${{ steps.weather.outputs.feels_like }}°C
+            • Условия: ${{ steps.weather.outputs.conditions }}
+            • Влажность: ${{ steps.weather.outputs.humidity }}%
+            • Ветер: ${{ steps.weather.outputs.wind_speed }} м/с
+            • Давление: ${{ steps.weather.outputs.pressure }} гПа
+
+            *Что надеть (${{ steps.weather.outputs.clothing }}):*
+            • Футболка/свитер (по погоде)
+            • Подходящая верхняя одежда
+            • Удобная обувь
+
+            *Чем заняться сегодня:*
+            • ${{ steps.weather.outputs.activity }}
+
+            *Совет:* Следите за изменением погоды в течение дня!
+
+            Хорошего дня! 🌟
+          parse_mode: markdown
+
+      - name: Сохраняем в историю
+        run: |
+          # Создаем запись
+          TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+          echo '{"date":"'"$TIMESTAMP"'","temp":"'"${{ steps.weather.outputs.temp }}"'","conditions":"'"${{ steps.weather.outputs.conditions }}"'"}' > new_entry.json
+
+          # Добавляем в историю
+          if [ -f "weather_history.json" ]; then
+            jq '.history += [input]' weather_history.json new_entry.json > tmp.json && mv tmp.json weather_history.json
+          else
+            echo '{"history":[]}' | jq '.history += [input]' - new_entry.json > weather_history.json
+          fi
+
+          # Оставляем только последние 7 дней
+          jq '.history = .history[-7:]' weather_history.json > tmp.json && mv tmp.json weather_history.json
+
+          # Коммитим изменения
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add weather_history.json
           git commit -m "Обновление истории погоды $(date +"%d.%m.%Y")" || echo "Нет изменений"
           git push || echo "Нечего пушить"
-          rm history_temp.json
