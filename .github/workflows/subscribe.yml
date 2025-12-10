@@ -1,0 +1,39 @@
+name: Подписка на погоду
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'ID пользователя для подписки'
+        required: true
+
+jobs:
+  subscribe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загружаем репозиторий
+        uses: actions/checkout@v4
+
+      - name: Добавляем подписчика
+        run: |
+          USER_ID="${{ github.event.inputs.user_id }}"
+          
+          # Создаем файл если его нет
+          if [ ! -f "subscribers.txt" ]; then
+            touch subscribers.txt
+          fi
+          
+          # Добавляем ID если его еще нет
+          if ! grep -q "^$USER_ID$" subscribers.txt; then
+            echo "$USER_ID" >> subscribers.txt
+            echo "✅ Пользователь $USER_ID добавлен"
+          else
+            echo "⚠️ Пользователь $USER_ID уже подписан"
+          fi
+          
+          # Коммитим изменения
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add subscribers.txt
+          git commit -m "Добавлен подписчик $USER_ID" || echo "Нет изменений"
+          git push || echo "Нечего пушить"
