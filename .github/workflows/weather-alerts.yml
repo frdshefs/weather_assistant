@@ -17,7 +17,7 @@ jobs:
           CITY_ID: ${{ secrets.CITY_ID }}
         run: |
           # Получаем текущую погоду
-          RESPONSE=$(curl -s "https://api.openweathermap.org/data/2.5/weather?id=$CITY_ID&appid=$API_KEY&units=metric&lang=ru")
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?")
           
           TEMP=$(echo $RESPONSE | jq -r '.main.temp')
           WIND_SPEED=$(echo $RESPONSE | jq -r '.wind.speed')
