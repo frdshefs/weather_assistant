@@ -1,0 +1,102 @@
+name: Ежечасная погода
+
+on:
+  schedule:
+    # Каждый час (в 0 минут каждого часа)
+    - cron: '0 * * * *'
+  workflow_dispatch:  # Ручной запуск
+
+jobs:
+  send-hourly-weather:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загружаем репозиторий
+        uses: actions/checkout@v4
+
+      - name: Устанавливаем jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Получаем текущую погоду
+        id: get_weather
+        env:
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
+        run: |
+          # Делаем запрос к Visual Crossing API
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?unitGroup=metric&include=current&key=$VC_API_KEY&contentType=json&lang=ru")
+          
+          # Парсим данные
+          TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
+          FEELS_LIKE=$(echo "$RESPONSE" | jq -r '.currentConditions.feelslike')
+          CONDITIONS=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
+          HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
+          WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
+          WIND_GUST=$(echo "$RESPONSE" | jq -r '.currentConditions.windgust // "N/A"')
+          UVINDEX=$(echo "$RESPONSE" | jq -r '.currentConditions.uvindex // "N/A"')
+          VISIBILITY=$(echo "$RESPONSE" | jq -r '.currentConditions.visibility // "N/A"')
+          
+          # Определяем эмодзи
+          case "$CONDITIONS" in
+            *Clear*|*Sunny*)
+              EMOJI="☀️"
+              ;;
+            *Partially*|*Cloud*)
+              EMOJI="⛅"
+              ;;
+            *Rain*|*Drizzle*)
+              EMOJI="🌧️"
+              ;;
+            *Snow*)
+              EMOJI="❄️"
+              ;;
+            *Fog*|*Mist*)
+              EMOJI="🌫️"
+              ;;
+            *Thunder*)
+              EMOJI="⛈️"
+              ;;
+            *)
+              EMOJI="🌤️"
+              ;;
+          esac
+          
+          # Получаем время
+          CURRENT_TIME=$(date +"%H:%M")
+          CURRENT_DATE=$(date +"%d.%m.%Y")
+          
+          # Сохраняем для отправки
+          echo "temp=$TEMP" >> $GITHUB_OUTPUT
+          echo "feels_like=$FEELS_LIKE" >> $GITHUB_OUTPUT
+          echo "conditions=$CONDITIONS" >> $GITHUB_OUTPUT
+          echo "humidity=$HUMIDITY" >> $GITHUB_OUTPUT
+          echo "wind_speed=$WIND_SPEED" >> $GITHUB_OUTPUT
+          echo "wind_gust=$WIND_GUST" >> $GITHUB_OUTPUT
+          echo "uvindex=$UVINDEX" >> $GITHUB_OUTPUT
+          echo "visibility=$VISIBILITY" >> $GITHUB_OUTPUT
+          echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
+          echo "time=$CURRENT_TIME" >> $GITHUB_OUTPUT
+          echo "date=$CURRENT_DATE" >> $GITHUB_OUTPUT
+
+      - name: Отправляем в Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ${{ steps.get_weather.outputs.emoji }} ОБНОВЛЕНИЕ ПОГОДЫ
+            
+            Время: ${{ steps.get_weather.outputs.time }} (${{ steps.get_weather.outputs.date }})
+            
+            Сейчас в Казани:
+            • Температура: ${{ steps.get_weather.outputs.temp }}°C
+            • Ощущается как: ${{ steps.get_weather.outputs.feels_like }}°C
+            • Погода: ${{ steps.get_weather.outputs.conditions }}
+            • Влажность: ${{ steps.get_weather.outputs.humidity }}%
+            • Ветер: ${{ steps.get_weather.outputs.wind_speed }} м/с
+            
+            Дополнительно:
+            • Порывы ветра: ${{ steps.get_weather.outputs.wind_gust }} м/с
+            • УФ-индекс: ${{ steps.get_weather.outputs.uvindex }}
+            • Видимость: ${{ steps.get_weather.outputs.visibility }} км
+            
+            Следующее обновление через час ⏰
+          parse_mode: HTML
