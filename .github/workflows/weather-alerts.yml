@@ -2,8 +2,7 @@ name: Экстренные погодные предупреждения
 
 on:
   schedule:
-    # Проверяем каждые 3 часа
-    - cron: '0 */3 * * *'
+    - cron: '0 */3 * * *'  # Каждые 3 часа
   workflow_dispatch:
 
 jobs:
@@ -13,51 +12,56 @@ jobs:
       - name: Загружаем репозиторий
         uses: actions/checkout@v4
 
+      - name: Устанавливаем утилиты
+        run: sudo apt-get update && sudo apt-get install -y jq bc
+
       - name: Проверяем опасную погоду
         id: check_danger
         env:
           VC_API_KEY: ${{ secrets.VC_API_KEY }}
         run: |
-          # Получаем текущую погоду
           RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?unitGroup=metric&include=current&key=$VC_API_KEY&contentType=json")
-
+          
           TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
           WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
           CONDITIONS=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
-
-          # Проверяем опасные условия
+          
           ALERT=""
           HAS_ALERT="false"
-
+          
           if (( $(echo "$TEMP >= 35" | bc -l) )); then
-            ALERT+="*Аномальная жара!* 🔥\nТемпература: ${TEMP}°C\n\n"
+            ALERT+="Аномальная жара! 🔥\nТемпература: ${TEMP}°C\n\n"
             HAS_ALERT="true"
           fi
-
+          
           if (( $(echo "$TEMP <= -20" | bc -l) )); then
-            ALERT+="*Сильный мороз!* ❄️\nТемпература: ${TEMP}°C\n\n"
+            ALERT+="Сильный мороз! ❄️\nТемпература: ${TEMP}°C\n\n"
             HAS_ALERT="true"
           fi
-
+          
           if (( $(echo "$WIND_SPEED >= 15" | bc -l) )); then
-            ALERT+="*Сильный ветер!* 💨\nСкорость: ${WIND_SPEED} м/с\n\n"
+            ALERT+="Сильный ветер! 💨\nСкорость: ${WIND_SPEED} м/с\n\n"
             HAS_ALERT="true"
           fi
-
+          
           if [[ "$CONDITIONS" == *"Thunderstorm"* ]]; then
-            ALERT+="*Гроза!* ⛈️\n$CONDITIONS\n\n"
+            ALERT+="Гроза! ⛈️\n$CONDITIONS\n\n"
             HAS_ALERT="true"
           fi
-
+          
           if [[ "$CONDITIONS" == *"Snow"* ]] && (( $(echo "$TEMP <= -10" | bc -l) )); then
-            ALERT+="*Сильный снегопад!* 🚨\n$CONDITIONS\n\n"
+            ALERT+="Сильный снегопад! 🚨\n$CONDITIONS\n\n"
             HAS_ALERT="true"
           fi
-
+          
+          # Получаем время
+          CURRENT_TIME=$(date +"%H:%M %d.%m.%Y")
+          
           echo "alert_message<<EOF" >> $GITHUB_OUTPUT
           echo "$ALERT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "has_alert=$HAS_ALERT" >> $GITHUB_OUTPUT
+          echo "time=$CURRENT_TIME" >> $GITHUB_OUTPUT
 
       - name: Отправляем предупреждение
         if: steps.check_danger.outputs.has_alert == 'true'
@@ -66,19 +70,19 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            🚨 *ПОГОДНОЕ ПРЕДУПРЕЖДЕНИЕ ДЛЯ КАЗАНИ*
+            🚨 ПОГОДНОЕ ПРЕДУПРЕЖДЕНИЕ ДЛЯ КАЗАНИ
 
             ${{ steps.check_danger.outputs.alert_message }}
 
-            *Рекомендации:*
+            Рекомендации:
             • Оставайтесь дома, если возможно
             • Оденьтесь по погоде
             • Будьте осторожны на дорогах
 
-            *Время:* $(date +"%H:%M %d.%m.%Y")
+            Время: ${{ steps.check_danger.outputs.time }}
 
             Берегите себя! 🙏
-          parse_mode: markdown
+          parse_mode: HTML
 
       - name: Сообщаем, что всё спокойно
         if: steps.check_danger.outputs.has_alert == 'false' && github.event_name == 'workflow_dispatch'
@@ -87,12 +91,12 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ✅ *ВСЁ СПОКОЙНО В КАЗАНИ*
+            ✅ ВСЁ СПОКОЙНО В КАЗАНИ
 
             Опасных погодных условий не обнаружено.
             Текущая погода безопасна для планирования дел.
 
-            *Время:* $(date +"%H:%M %d.%m.%Y")
+            Время: ${{ steps.check_danger.outputs.time }}
 
             Хорошего дня! 🌤️
-          parse_mode: markdown
+          parse_mode: HTML
