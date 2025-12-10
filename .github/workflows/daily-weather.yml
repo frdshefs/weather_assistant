@@ -12,16 +12,18 @@ jobs:
       - name: Загружаем репозиторий
         uses: actions/checkout@v4
 
-      - name: Устанавливаем jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Устанавливаем утилиты
+        run: sudo apt-get update && sudo apt-get install -y jq bc
 
       - name: Получаем погоду
         id: weather
         env:
           VC_API_KEY: ${{ secrets.VC_API_KEY }}
         run: |
+          # Делаем запрос к Visual Crossing API
           RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/kazan?unitGroup=metric&include=current&key=$VC_API_KEY&contentType=json&lang=ru")
           
+          # Парсим данные из JSON
           TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
           FEELS_LIKE=$(echo "$RESPONSE" | jq -r '.currentConditions.feelslike')
           HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
@@ -29,7 +31,7 @@ jobs:
           CONDITIONS=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
           PRESSURE=$(echo "$RESPONSE" | jq -r '.currentConditions.pressure // "N/A"')
           
-          # Определяем одежду
+          # Определяем рекомендацию по одежде
           if (( $(echo "$TEMP >= 25" | bc -l) )); then
             CLOTHING="очень жарко"
           elif (( $(echo "$TEMP >= 18" | bc -l) )); then
@@ -42,7 +44,7 @@ jobs:
             CLOTHING="очень холодно"
           fi
           
-          # Эмодзи и активность
+          # Определяем эмодзи и активность
           case "$CONDITIONS" in
             *Clear*|*Sunny*)
               EMOJI="☀️"
@@ -66,6 +68,10 @@ jobs:
               ;;
           esac
           
+          # Получаем дату для истории
+          CURRENT_DATE=$(date +"%Y-%m-%d")
+          
+          # Сохраняем данные для следующих шагов
           echo "temp=$TEMP" >> $GITHUB_OUTPUT
           echo "feels_like=$FEELS_LIKE" >> $GITHUB_OUTPUT
           echo "humidity=$HUMIDITY" >> $GITHUB_OUTPUT
@@ -75,6 +81,7 @@ jobs:
           echo "clothing=$CLOTHING" >> $GITHUB_OUTPUT
           echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
           echo "activity=$ACTIVITY" >> $GITHUB_OUTPUT
+          echo "date=$CURRENT_DATE" >> $GITHUB_OUTPUT
 
       - name: Отправляем в Telegram
         uses: appleboy/telegram-action@master
@@ -102,24 +109,47 @@ jobs:
 
             Совет: Следите за изменением погоды в течение дня!
 
+            ⚡ Команды бота:
+            • /weather - Текущая погода
+            • /alerts - Проверить предупреждения
+            • /report - Недельный отчет
+            • /hourly - Подписаться на ежечасные
+            • /stop - Отписаться от рассылки
+
+            Просто отправь одну из этих команд боту!
+
             Хорошего дня! 🌟
           parse_mode: HTML
 
       - name: Сохраняем в историю
         run: |
+          # Создаем запись для истории
           TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-          echo '{"date":"'"$TIMESTAMP"'","temp":"'"${{ steps.weather.outputs.temp }}"'","conditions":"'"${{ steps.weather.outputs.conditions }}"'"}' > new_entry.json
+          ENTRY='{"date":"'"$TIMESTAMP"'","temp":"'"${{ steps.weather.outputs.temp }}"'","conditions":"'"${{ steps.weather.outputs.conditions }}"'"}'
           
+          # Создаем временный файл с записью
+          echo "$ENTRY" > temp_entry.json
+          
+          # Обрабатываем файл истории
           if [ -f "weather_history.json" ]; then
-            jq '.history += [input]' weather_history.json new_entry.json > tmp.json && mv tmp.json weather_history.json
+            # Файл существует - добавляем новую запись
+            jq '.history += [input]' weather_history.json temp_entry.json > temp.json
+            mv temp.json weather_history.json
           else
-            echo '{"history":[]}' | jq '.history += [input]' - new_entry.json > weather_history.json
+            # Файла нет - создаем новый
+            echo '{"history":[]}' | jq '.history += [input]' - temp_entry.json > weather_history.json
           fi
           
-          jq '.history = .history[-7:]' weather_history.json > tmp.json && mv tmp.json weather_history.json
+          # Оставляем только последние 7 дней (168 часов)
+          jq '.history = .history[-7:]' weather_history.json > temp.json
+          mv temp.json weather_history.json
           
+          # Очищаем временные файлы
+          rm temp_entry.json
+          
+          # Коммитим изменения если они есть
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git add weather_history.json
-          git commit -m "Обновление истории погоды $(date +"%d.%m.%Y")" || echo "Нет изменений"
+          git commit -m "Обновление истории погоды ${{ steps.weather.outputs.date }}" || echo "Нет изменений для коммита"
           git push || echo "Нечего пушить"
