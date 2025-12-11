@@ -1,0 +1,238 @@
+name: Генератор списка вещей
+
+on:
+  workflow_dispatch:
+    inputs:
+      trip_type:
+        description: 'Тип поездки'
+        required: true
+        type: choice
+        options:
+          - пляжный отдых
+          - городской туризм
+          - горный поход
+          - деловая поездка
+          - кемпинг
+      days:
+        description: 'Количество дней'
+        required: true
+        type: number
+        default: 7
+      destination:
+        description: 'Пункт назначения (для прогноза погоды)'
+        required: false
+        type: string
+        default: 'казань'
+      has_checklist:
+        description: 'Добавить чеклист для отметок?'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  generate-packing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загружаем код
+        uses: actions/checkout@v4
+
+      - name: Получаем прогноз погоды для пункта назначения
+        if: ${{ github.event.inputs.destination != '' }}
+        id: weather_forecast
+        env:
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
+        run: |
+          DESTINATION="${{ github.event.inputs.destination }}"
+          DAYS="${{ github.event.inputs.days }}"
+          
+          # Получаем прогноз на количество дней поездки
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/$DESTINATION/$DAYS?unitGroup=metric&include=days&key=$VC_API_KEY&contentType=json&lang=ru")
+          
+          # Анализируем погоду на весь период
+          MIN_TEMP=$(echo "$RESPONSE" | jq '[.days[].tempmin] | min')
+          MAX_TEMP=$(echo "$RESPONSE" | jq '[.days[].tempmax] | max')
+          AVG_TEMP=$(echo "$RESPONSE" | jq '[.days[].temp] | add / length | round')
+          
+          # Проверяем наличие осадков
+          HAS_RAIN=$(echo "$RESPONSE" | jq '[.days[].preciptype] | any(. != null and contains("rain"))')
+          HAS_SNOW=$(echo "$RESPONSE" | jq '[.days[].preciptype] | any(. != null and contains("snow"))')
+          
+          echo "min_temp=$MIN_TEMP" >> $GITHUB_OUTPUT
+          echo "max_temp=$MAX_TEMP" >> $GITHUB_OUTPUT
+          echo "avg_temp=$AVG_TEMP" >> $GITHUB_OUTPUT
+          echo "has_rain=$HAS_RAIN" >> $GITHUB_OUTPUT
+          echo "has_snow=$HAS_SNOW" >> $GITHUB_OUTPUT
+          echo "destination=$DESTINATION" >> $GITHUB_OUTPUT
+
+      - name: Генерируем список вещей
+        id: generate_list
+        run: |
+          TRIP_TYPE="${{ github.event.inputs.trip_type }}"
+          DAYS="${{ github.event.inputs.days }}"
+          MIN_TEMP="${{ steps.weather_forecast.outputs.min_temp }}"
+          MAX_TEMP="${{ steps.weather_forecast.outputs.max_temp }}"
+          
+          # Базовые вещи для всех поездок
+          BASE_ITEMS="*БАЗОВЫЕ ВЕЩИ:*\n"
+          BASE_ITEMS+="• Документы (паспорт, билеты, страховка)\n"
+          BASE_ITEMS+="• Деньги и банковские карты\n"
+          BASE_ITEMS+="• Телефон и зарядное устройство\n"
+          BASE_ITEMS+="• Лекарства (личные + базовые)\n"
+          BASE_ITEMS+="• Гигиенические принадлежности\n"
+          BASE_ITEMS+="• Влажные салфетки\n"
+          
+          # Добавляем рекомендации по одежде в зависимости от температуры
+          CLOTHING_TIPS=""
+          if [ ! -z "$MIN_TEMP" ] && [ ! -z "$MAX_TEMP" ]; then
+            CLOTHING_TIPS="*ПОГОДА В ${{ steps.weather_forecast.outputs.destination }}:*\n"
+            CLOTHING_TIPS+="• Мин. темп.: ${MIN_TEMP}°C\n"
+            CLOTHING_TIPS+="• Макс. темп.: ${MAX_TEMP}°C\n\n"
+            
+            # Рекомендации по одежде
+            if (( $(echo "$MAX_TEMP >= 25" | bc -l) )); then
+              CLOTHING_TIPS+="*Рекомендации:*\n• Легкая одежда (шорты, футболки)\n• Головной убор\n• Солнцезащитные очки\n• Крем от загара\n"
+            elif (( $(echo "$MIN_TEMP < 10" | bc -l) )); then
+              CLOTHING_TIPS+="*Рекомендации:*\n• Теплая куртка\n• Свитер/кофта\n• Термобелье\n• Шапка, шарф, перчатки\n"
+            else
+              CLOTHING_TIPS+="*Рекомендации:*\n• Джинсы/брюки\n• Свитер/кофта\n• Ветровка\n• Удобная обувь\n"
+            fi
+            
+            # Добавляем рекомендации по осадкам
+            if [ "${{ steps.weather_forecast.outputs.has_rain }}" = "true" ]; then
+              CLOTHING_TIPS+="• Дождевик или зонт\n• Водонепроницаемая обувь\n"
+            fi
+            if [ "${{ steps.weather_forecast.outputs.has_snow }}" = "true" ]; then
+              CLOTHING_TIPS+="• Теплая зимняя обувь\n• Непромокаемые перчатки\n"
+            fi
+          fi
+          
+          # Вещи в зависимости от типа поездки
+          SPECIFIC_ITEMS=""
+          case $TRIP_TYPE in
+            "пляжный отдых")
+              SPECIFIC_ITEMS="*ДЛЯ ПЛЯЖНОГО ОТДЫХА:*\n"
+              SPECIFIC_ITEMS+="• Купальник/плавки\n"
+              SPECIFIC_ITEMS+="• Пляжное полотенце\n"
+              SPECIFIC_ITEMS+="• Крем от загара SPF 30+\n"
+              SPECIFIC_ITEMS+="• Панама/кепка\n"
+              SPECIFIC_ITEMS+="• Солнцезащитные очки\n"
+              SPECIFIC_ITEMS+="• Шлепанцы\n"
+              SPECIFIC_ITEMS+="• Пляжная сумка\n"
+              ;;
+            "городской туризм")
+              SPECIFIC_ITEMS="*ДЛЯ ГОРОДСКОГО ТУРИЗМА:*\n"
+              SPECIFIC_ITEMS+="• Удобная обувь для ходьбы\n"
+              SPECIFIC_ITEMS+="• Рюкзак для экскурсий\n"
+              SPECIFIC_ITEMS+="• Power bank\n"
+              SPECIFIC_ITEMS+="• Наушники\n"
+              SPECIFIC_ITEMS+="• Карта города/навигатор\n"
+              SPECIFIC_ITEMS+="• Бутылка для воды\n"
+              ;;
+            "горный поход")
+              SPECIFIC_ITEMS="*ДЛЯ ГОРНОГО ПОХОДА:*\n"
+              SPECIFIC_ITEMS+="• Треккинговые ботинки\n"
+              SPECIFIC_ITEMS+="• Термобелье\n"
+              SPECIFIC_ITEMS+="• Теплая куртка\n"
+              SPECIFIC_ITEMS+="• Рюкзак туристический\n"
+              SPECIFIC_ITEMS+="• Фонарик\n"
+              SPECIFIC_ITEMS+="• Термос\n"
+              SPECIFIC_ITEMS+="• Солнцезащитный крем\n"
+              ;;
+            "деловая поездка")
+              SPECIFIC_ITEMS="*ДЛЯ ДЕЛОВОЙ ПОЕЗДКИ:*\n"
+              SPECIFIC_ITEMS+="• Деловой костюм/платье\n"
+              SPECIFIC_ITEMS+="• Сменная обувь\n"
+              SPECIFIC_ITEMS+="• Ноутбук и аксессуары\n"
+              SPECIFIC_ITEMS+="• Блокнот и ручки\n"
+              SPECIFIC_ITEMS+="• Визитки\n"
+              SPECIFIC_ITEMS+="• Гаджеты для презентаций\n"
+              ;;
+            "кемпинг")
+              SPECIFIC_ITEMS="*ДЛЯ КЕМПИНГА:*\n"
+              SPECIFIC_ITEMS+="• Палатка\n"
+              SPECIFIC_ITEMS+="• Спальник\n"
+              SPECIFIC_ITEMS+="• Коврик туристический\n"
+              SPECIFIC_ITEMS+="• Горелка и посуда\n"
+              SPECIFIC_ITEMS+="• Фонарик/фонарь\n"
+              SPECIFIC_ITEMS+="• Нож мультитул\n"
+              SPECIFIC_ITEMS+="• Средство от насекомых\n"
+              ;;
+          esac
+          
+          # Расчет количества одежды
+          CLOTHING_COUNT="*ОДЕЖДА ($DAYS дней):*\n"
+          if [ $DAYS -le 3 ]; then
+            CLOTHING_COUNT+="• $((DAYS + 1)) комплектов одежды\n"
+            CLOTHING_COUNT+="• $((DAYS + 1)) пар носков\n"
+            CLOTHING_COUNT+="• $((DAYS + 1)) пар нижнего белья\n"
+          elif [ $DAYS -le 7 ]; then
+            CLOTHING_COUNT+="• 5-6 комплектов одежды\n"
+            CLOTHING_COUNT+="• 7 пар носков\n"
+            CLOTHING_COUNT+="• 7 пар нижнего белья\n"
+          else
+            CLOTHING_COUNT+="• 7 комплектов одежды + возможность постирать\n"
+            CLOTHING_COUNT+="• 10 пар носков\n"
+            CLOTHING_COUNT+="• 10 пар нижнего белья\n"
+          fi
+          
+          # Формируем итоговый список
+          FINAL_LIST="*СПИСОК ВЕЩЕЙ ДЛЯ ПОЕЗДКИ*\n"
+          FINAL_LIST+="Тип: $TRIP_TYPE\n"
+          FINAL_LIST+="Длительность: $DAYS дней\n"
+          FINAL_LIST+="Дата: $(date +"%d.%m.%Y")\n\n"
+          
+          if [ ! -z "$CLOTHING_TIPS" ]; then
+            FINAL_LIST+="$CLOTHING_TIPS\n"
+          fi
+          
+          FINAL_LIST+="$BASE_ITEMS\n"
+          FINAL_LIST+="$SPECIFIC_ITEMS\n"
+          FINAL_LIST+="$CLOTHING_COUNT"
+          
+          # Добавляем чеклист если нужно
+          if [ "${{ github.event.inputs.has_checklist }}" = "true" ]; then
+            FINAL_LIST+="\n*ЧЕКЛИСТ ДЛЯ ОТМЕТОК:*\n"
+            FINAL_LIST+="[ ] Вещи собраны\n"
+            FINAL_LIST+="[ ] Документы проверены\n"
+            FINAL_LIST+="[ ] Деньги подготовлены\n"
+            FINAL_LIST+="[ ] Гаджеты заряжены\n"
+            FINAL_LIST+="[ ] Продукты в дорогу\n"
+            FINAL_LIST+="[ ] Аптечка собрана\n"
+          fi
+          
+          echo "packing_list<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$FINAL_LIST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "trip_type=$TRIP_TYPE" >> $GITHUB_OUTPUT
+          echo "days=$DAYS" >> $GITHUB_OUTPUT
+
+      - name: Отправляем список вещей в Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ${{ steps.generate_list.outputs.packing_list }}
+            
+            *Советы по упаковке:*
+            1. Складывайте вещи рулончиком - экономит место
+            2. Тяжелые вещи кладите вниз рюкзака
+            3. Документы и деньги держите при себе
+            4. Зарядки и мелкие вещи – в отдельный карман
+            5. Не берите лишнее!
+            
+            Удачной упаковки! 🎒✨
+          parse_mode: markdown
+
+      - name: Сохраняем список в файл
+        run: |
+          # Создаем текстовый файл
+          FILENAME="packing_list_${{ steps.generate_list.outputs.trip_type }}_$(date +%Y%m%d).txt"
+          echo -e "${{ steps.generate_list.outputs.packing_list }}" > $FILENAME
+          
+          # Коммитим
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git add $FILENAME
+          git commit -m "Добавлен список вещей для ${{ steps.generate_list.outputs.trip_type }}"
+          git push
