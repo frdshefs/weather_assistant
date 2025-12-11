@@ -1,19 +1,287 @@
-- name: Получаем погоду в пункте назначения
-  id: weather
-  env:
-    API_KEY: ${{ secrets.VC_API_KEY }} # Используем ваш VC ключ
-  run: |
-    # Используем Visual Crossing API вместо OpenWeather
-    # Для примера берем Москву (замените city_id на логику выбора города)
-    RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/Moscow?unitGroup=metric&include=current&key=$API_KEY&contentType=json&lang=ru")
-    
-    # Парсим данные (структура ответа другая!)
-    TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
-    DESCRIPTION=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
-    HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
-    WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
-    
-    echo "temp=$TEMP" >> $GITHUB_OUTPUT
-    echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
-    echo "humidity=$HUMIDITY" >> $GITHUB_OUTPUT
-    echo "wind_speed=$WIND_SPEED" >> $GITHUB_OUTPUT
+name: Планировщик путешествий
+
+on:
+  workflow_dispatch:
+    inputs:
+      destination:
+        description: 'Куда едем?'
+        required: true
+        type: choice
+        options:
+          - москва
+          - санкт-петербург
+          - сочи
+          - париж
+          - токио
+      days:
+        description: 'На сколько дней?'
+        required: true
+        type: number
+        default: 7
+      budget:
+        description: 'Бюджет на человека (в рублях)'
+        required: false
+        type: number
+        default: 50000
+      season:
+        description: 'Сезон поездки'
+        required: true
+        type: choice
+        options:
+          - лето
+          - зима
+          - весна осень
+
+jobs:
+  generate-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загружаем код
+        uses: actions/checkout@v4
+
+      - name: Устанавливаем утилиты
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Получаем погоду в пункте назначения
+        id: weather
+        env:
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
+        run: |
+          # Получаем название города с заглавной буквы для API
+          DESTINATION="${{ github.event.inputs.destination }}"
+          CITY_NAME="${DESTINATION^}"
+          
+          # Делаем запрос к Visual Crossing API
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${CITY_NAME}?unitGroup=metric&include=current&key=${VC_API_KEY}&contentType=json&lang=ru")
+          
+          # Парсим данные из JSON
+          TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
+          DESCRIPTION=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
+          HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
+          WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
+          
+          echo "temp=${TEMP}" >> $GITHUB_OUTPUT
+          echo "description=${DESCRIPTION}" >> $GITHUB_OUTPUT
+          echo "humidity=${HUMIDITY}" >> $GITHUB_OUTPUT
+          echo "wind_speed=${WIND_SPEED}" >> $GITHUB_OUTPUT
+          echo "city_name=${CITY_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Формируем список вещей
+        id: packing_list
+        run: |
+          # Получаем список вещей для сезона
+          ITEMS=$(yq eval ".packing_lists.${{ github.event.inputs.season }}.обязательно[]" travel_config.yaml)
+          
+          # Форматируем
+          PACKING_LIST=""
+          while IFS= read -r item; do
+            PACKING_LIST+="• $item\n"
+          done <<< "$ITEMS"
+          
+          echo "packing_list<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$PACKING_LIST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Рассчитываем бюджет
+        id: budget_calc
+        run: |
+          DESTINATION="${{ github.event.inputs.destination }}"
+          DAYS="${{ github.event.inputs.days }}"
+          USER_BUDGET="${{ github.event.inputs.budget }}"
+          
+          # Получаем валюту пункта назначения из конфига
+          CURRENCY=$(yq eval ".destinations.$DESTINATION.currency" travel_config.yaml)
+          
+          # Получаем цены из конфигурации (берем средние значения из диапазонов)
+          # Для расчета берем среднее значение диапазона: (мин+макс)/2
+          PLANE_RANGE=$(yq eval '.estimated_costs.транспорт.самолет' travel_config.yaml)
+          PLANE_MIN=$(echo "$PLANE_RANGE" | cut -d'-' -f1)
+          PLANE_MAX=$(echo "$PLANE_RANGE" | cut -d'-' -f2)
+          PLANE_COST=$(( (PLANE_MIN + PLANE_MAX) / 2 ))
+          
+          TRAIN_RANGE=$(yq eval '.estimated_costs.транспорт.поезд' travel_config.yaml)
+          TRAIN_MIN=$(echo "$TRAIN_RANGE" | cut -d'-' -f1)
+          TRAIN_MAX=$(echo "$TRAIN_RANGE" | cut -d'-' -f2)
+          TRAIN_COST=$(( (TRAIN_MIN + TRAIN_MAX) / 2 ))
+          
+          HOTEL_RANGE=$(yq eval '.estimated_costs.проживание.отель' travel_config.yaml)
+          HOTEL_MIN=$(echo "$HOTEL_RANGE" | cut -d'-' -f1)
+          HOTEL_MAX=$(echo "$HOTEL_RANGE" | cut -d'-' -f2)
+          HOTEL_COST=$(( (HOTEL_MIN + HOTEL_MAX) / 2 ))
+          
+          FOOD_RANGE=$(yq eval '.estimated_costs.питание.день' travel_config.yaml)
+          FOOD_MIN=$(echo "$FOOD_RANGE" | cut -d'-' -f1)
+          FOOD_MAX=$(echo "$FOOD_RANGE" | cut -d'-' -f2)
+          FOOD_COST=$(( (FOOD_MIN + FOOD_MAX) / 2 ))
+          
+          MUSEUM_RANGE=$(yq eval '.estimated_costs.развлечения.музей' travel_config.yaml)
+          MUSEUM_MIN=$(echo "$MUSEUM_RANGE" | cut -d'-' -f1)
+          MUSEUM_MAX=$(echo "$MUSEUM_RANGE" | cut -d'-' -f2)
+          MUSEUM_COST=$(( (MUSEUM_MIN + MUSEUM_MAX) / 2 ))
+          
+          # Рассчитываем примерные расходы (базовая логика)
+          # Транспорт: выбираем самолет или поезд в зависимости от расстояния
+          if [[ "$DESTINATION" == "париж" || "$DESTINATION" == "токио" ]]; then
+            TRANSPORT=$PLANE_COST
+            TRANSPORT_TYPE="самолет"
+          else
+            TRANSPORT=$TRAIN_COST
+            TRANSPORT_TYPE="поезд"
+          fi
+          
+          HOTEL=$((HOTEL_COST * DAYS))
+          FOOD=$((FOOD_COST * DAYS))
+          ACTIVITIES=$((MUSEUM_COST * 2 * DAYS / 3))  # 2 музея каждые 3 дня
+          
+          TOTAL=$((TRANSPORT + HOTEL + FOOD + ACTIVITIES))
+          DAILY_AVG=$((TOTAL / DAYS))
+          
+          # Проверяем укладываемся ли в бюджет
+          if [ $TOTAL -le $USER_BUDGET ]; then
+            BUDGET_STATUS="✅ Укладываемся в бюджет"
+          else
+            OVER_BUDGET=$((TOTAL - USER_BUDGET))
+            BUDGET_STATUS="❌ Превышаем бюджет на $OVER_BUDGET руб."
+          fi
+          
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "daily_avg=$DAILY_AVG" >> $GITHUB_OUTPUT
+          echo "budget_status=$BUDGET_STATUS" >> $GITHUB_OUTPUT
+          echo "currency=$CURRENCY" >> $GITHUB_OUTPUT
+          echo "transport=$TRANSPORT" >> $GITHUB_OUTPUT
+          echo "hotel=$HOTEL" >> $GITHUB_OUTPUT
+          echo "food=$FOOD" >> $GITHUB_OUTPUT
+          echo "activities=$ACTIVITIES" >> $GITHUB_OUTPUT
+          echo "transport_type=$TRANSPORT_TYPE" >> $GITHUB_OUTPUT
+
+      - name: Получаем информацию о городе
+        id: city_info
+        run: |
+          # Получаем данные из конфига
+          DESTINATION="${{ github.event.inputs.destination }}"
+          CURRENCY=$(yq eval ".destinations.$DESTINATION.currency" travel_config.yaml)
+          TIMEZONE=$(yq eval ".destinations.$DESTINATION.timezone" travel_config.yaml)
+          LANGUAGE=$(yq eval ".destinations.$DESTINATION.language" travel_config.yaml)
+          
+          # Форматируем название города с заглавной буквы
+          CITY_NAME="${DESTINATION^}"
+          
+          echo "currency=$CURRENCY" >> $GITHUB_OUTPUT
+          echo "timezone=$TIMEZONE" >> $GITHUB_OUTPUT
+          echo "language=$LANGUAGE" >> $GITHUB_OUTPUT
+          echo "city_name=$CITY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Получаем полезные советы
+        id: tips
+        run: |
+          # Общие советы
+          GENERAL_TIPS=$(yq eval '.travel_tips.общие[]' travel_config.yaml)
+          DOC_TIPS=$(yq eval '.travel_tips.документы[]' travel_config.yaml)
+          
+          # Форматируем
+          TIPS_TEXT=""
+          TIPS_TEXT+="*Общие советы:*\n"
+          while IFS= read -r tip; do
+            TIPS_TEXT+="• $tip\n"
+          done <<< "$GENERAL_TIPS"
+          
+          TIPS_TEXT+="\n*Документы:*\n"
+          while IFS= read -r tip; do
+            TIPS_TEXT+="• $tip\n"
+          done <<< "$DOC_TIPS"
+          
+          echo "tips<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$TIPS_TEXT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Отправляем план в Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *ПЛАН ПУТЕШЕСТВИЯ В ${{ steps.city_info.outputs.city_name }}*
+            
+            *Детали поездки:*
+            • Направление: ${{ steps.city_info.outputs.city_name }}
+            • Длительность: ${{ github.event.inputs.days }} дней
+            • Сезон: ${{ github.event.inputs.season }}
+            • Язык: ${{ steps.city_info.outputs.language }}
+            • Валюта: ${{ steps.budget_calc.outputs.currency }}
+            • Часовой пояс: ${{ steps.city_info.outputs.timezone }}
+            
+            *Погода на сейчас:*
+            • Температура: ${{ steps.weather.outputs.temp }}°C
+            • Описание: ${{ steps.weather.outputs.description }}
+            • Влажность: ${{ steps.weather.outputs.humidity }}%
+            • Ветер: ${{ steps.weather.outputs.wind_speed }} м/с
+            
+            *Финансовый план:*
+            • Ваш бюджет: ${{ github.event.inputs.budget }} руб.
+            • Примерная стоимость: ${{ steps.budget_calc.outputs.total }} руб.
+            • В среднем в день: ${{ steps.budget_calc.outputs.daily_avg }} руб.
+            • Статус: ${{ steps.budget_calc.outputs.budget_status }}
+            
+            *Детализация расходов:*
+            • Транспорт (${{ steps.budget_calc.outputs.transport_type }}): ${{ steps.budget_calc.outputs.transport }} руб.
+            • Проживание (${{ github.event.inputs.days }} дней): ${{ steps.budget_calc.outputs.hotel }} руб.
+            • Питание: ${{ steps.budget_calc.outputs.food }} руб.
+            • Развлечения: ${{ steps.budget_calc.outputs.activities }} руб.
+            
+            *Что взять с собой (${{ github.event.inputs.season }}):*
+            ${{ steps.packing_list.outputs.packing_list }}
+            
+            *Полезные советы:*
+            ${{ steps.tips.outputs.tips }}
+            
+            *Рекомендации:*
+            1. Забронируйте билеты и отель заранее
+            2. Обменяйте валюту перед поездкой
+            3. Скачайте разговорник/переводчик
+            4. Изучите местный транспорт
+            
+            *Приятного путешествия!* ✈️
+          parse_mode: markdown
+
+      - name: Сохраняем план в файл
+        run: |
+          # Создаем файл с планом
+          PLAN_FILE="travel_plan_$(date +%Y%m%d_%H%M%S).txt"
+          
+          # Устанавливаем московское время для даты
+          export TZ='Europe/Moscow'
+          
+          cat > $PLAN_FILE << EOF
+          ПЛАН ПУТЕШЕСТВИЯ
+          =================
+          
+          Направление: ${{ steps.city_info.outputs.city_name }}
+          Дата создания: $(date +"%d.%m.%Y %H:%M")
+          Длительность: ${{ github.event.inputs.days }} дней
+          Сезон: ${{ github.event.inputs.season }}
+          
+          ПОГОДА:
+          • Температура: ${{ steps.weather.outputs.temp }}°C
+          • Описание: ${{ steps.weather.outputs.description }}
+          • Влажность: ${{ steps.weather.outputs.humidity }}%
+          
+          БЮДЖЕТ:
+          • Общий бюджет: ${{ github.event.inputs.budget }} руб.
+          • Примерная стоимость: ${{ steps.budget_calc.outputs.total }} руб.
+          • Статус: ${{ steps.budget_calc.outputs.budget_status }}
+          
+          СПИСОК ВЕЩЕЙ:
+          ${{ steps.packing_list.outputs.packing_list }}
+          
+          СОВЕТЫ:
+          ${{ steps.tips.outputs.tips }}
+          EOF
+          
+          # Пытаемся закоммитить файл (но не падаем при ошибке)
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git add $PLAN_FILE || echo "Не удалось добавить файл"
+          git commit -m "Добавлен план путешествия в ${{ steps.city_info.outputs.city_name }}" || echo "Нет изменений для коммита"
+          git push || echo "Не удалось отправить изменения"
