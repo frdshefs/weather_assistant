@@ -1,0 +1,19 @@
+- name: Получаем погоду в пункте назначения
+  id: weather
+  env:
+    API_KEY: ${{ secrets.VC_API_KEY }} # Используем ваш VC ключ
+  run: |
+    # Используем Visual Crossing API вместо OpenWeather
+    # Для примера берем Москву (замените city_id на логику выбора города)
+    RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/Moscow?unitGroup=metric&include=current&key=$API_KEY&contentType=json&lang=ru")
+    
+    # Парсим данные (структура ответа другая!)
+    TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
+    DESCRIPTION=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
+    HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
+    WIND_SPEED=$(echo "$RESPONSE" | jq -r '.currentConditions.windspeed')
+    
+    echo "temp=$TEMP" >> $GITHUB_OUTPUT
+    echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+    echo "humidity=$HUMIDITY" >> $GITHUB_OUTPUT
+    echo "wind_speed=$WIND_SPEED" >> $GITHUB_OUTPUT
