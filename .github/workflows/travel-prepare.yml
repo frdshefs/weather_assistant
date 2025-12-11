@@ -1,0 +1,144 @@
+name: Подготовка к поездке
+
+on:
+  schedule:
+    # За 3 дня до поездки (пример - выполняется каждый день в 6 утра)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      travel_date:
+        description: 'Дата поездки (ГГГГ-ММ-ДД)'
+        required: true
+        type: string
+        default: '2024-02-01'
+      destination:
+        description: 'Пункт назначения'
+        required: true
+        type: string
+        default: 'казань'
+
+jobs:
+  countdown:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Рассчитываем сколько дней осталось
+        id: days_left
+        run: |
+          TRAVEL_DATE="${{ github.event.inputs.travel_date }}"
+          TODAY=$(date +%s)
+          TRAVEL=$(date -d "$TRAVEL_DATE" +%s 2>/dev/null || date -d "${TRAVEL_DATE}T00:00:00" +%s)
+          
+          # Рассчитываем разницу в днях
+          SECONDS_LEFT=$((TRAVEL - TODAY))
+          DAYS_LEFT=$((SECONDS_LEFT / 86400))
+          
+          # Если дата уже прошла
+          if [ $DAYS_LEFT -lt 0 ]; then
+            DAYS_LEFT=0
+          fi
+          
+          echo "days_left=$DAYS_LEFT" >> $GITHUB_OUTPUT
+          echo "travel_date=$TRAVEL_DATE" >> $GITHUB_OUTPUT
+          
+          # Получаем погоду для пункта назначения
+          echo "destination=${{ github.event.inputs.destination }}" >> $GITHUB_OUTPUT
+
+      - name: Получаем погоду в пункте назначения
+        if: steps.days_left.outputs.days_left <= 7
+        id: destination_weather
+        env:
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
+        run: |
+          DESTINATION="${{ github.event.inputs.destination }}"
+          # Используем Visual Crossing API для получения погоды
+          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/$DESTINATION?unitGroup=metric&include=current&key=$VC_API_KEY&contentType=json&lang=ru")
+          
+          TEMP=$(echo "$RESPONSE" | jq -r '.currentConditions.temp')
+          CONDITIONS=$(echo "$RESPONSE" | jq -r '.currentConditions.conditions')
+          HUMIDITY=$(echo "$RESPONSE" | jq -r '.currentConditions.humidity')
+          
+          echo "dest_temp=$TEMP" >> $GITHUB_OUTPUT
+          echo "dest_conditions=$CONDITIONS" >> $GITHUB_OUTPUT
+          echo "dest_humidity=$HUMIDITY" >> $GITHUB_OUTPUT
+
+      - name: Генерируем чеклист подготовки
+        id: checklist
+        run: |
+          DAYS_LEFT=${{ steps.days_left.outputs.days_left }}
+          DESTINATION="${{ github.event.inputs.destination }}"
+          
+          # Разный чеклист в зависимости от дней
+          CHECKLIST=""
+          
+          if [ $DAYS_LEFT -le 1 ]; then
+            CHECKLIST+="*ЗАВТРА ЕДЕМ!*\n\n"
+            CHECKLIST+="• Собрать вещи\n"
+            CHECKLIST+="• Проверить документы\n"
+            CHECKLIST+="• Распечатать билеты\n"
+            CHECKLIST+="• Зарядить гаджеты\n"
+            CHECKLIST+="• Взять зарядные устройства\n"
+            CHECKLIST+="• Подготовить еду в дорогу\n"
+          elif [ $DAYS_LEFT -le 3 ]; then
+            CHECKLIST+="*Осталось 3 дня*\n\n"
+            CHECKLIST+="• Подтвердить бронь отеля\n"
+            CHECKLIST+="• Обменять валюту\n"
+            CHECKLIST+="• Скачать оффлайн карты\n"
+            CHECKLIST+="• Собрать аптечку\n"
+            CHECKLIST+="• Начать собирать вещи\n"
+            CHECKLIST+="• Проверить прогноз погоды в $DESTINATION\n"
+          elif [ $DAYS_LEFT -le 7 ]; then
+            CHECKLIST+="*Осталась неделя*\n\n"
+            CHECKLIST+="• Проверить наличие билетов\n"
+            CHECKLIST+="• Подтвердить бронирования\n"
+            CHECKLIST+="• Составить список вещей\n"
+            CHECKLIST+="• Рассчитать бюджет\n"
+            CHECKLIST+="• Изучить маршрут\n"
+            CHECKLIST+="• Посмотреть погоду в $DESTINATION\n"
+          elif [ $DAYS_LEFT -le 14 ]; then
+            CHECKLIST+="*Осталось 2 недели*\n\n"
+            CHECKLIST+="• Проверить прогноз погоды\n"
+            CHECKLIST+="• Изучить информацию о городе\n"
+            CHECKLIST+="• Запланировать активности\n"
+            CHECKLIST+="• Купить недостающие вещи\n"
+            CHECKLIST+="• Уведомить на работе\n"
+          else
+            CHECKLIST+="*Еще много времени*\n\n"
+            CHECKLIST+="• Купить билеты\n"
+            CHECKLIST+="• Забронировать жилье\n"
+            CHECKLIST+="• Составить общий план\n"
+            CHECKLIST+="• Начать откладывать деньги\n"
+            CHECKLIST+="• Изучить базовые фразы на местном языке\n"
+          fi
+          
+          echo "checklist<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$CHECKLIST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Отправляем напоминание в Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *НАПОМИНАНИЕ О ПОЕЗДКЕ*
+            
+            🗓️ *Дата поездки:* ${{ steps.days_left.outputs.travel_date }}
+            ⏳ *Осталось дней:* ${{ steps.days_left.outputs.days_left }}
+            🎯 *Пункт назначения:* ${{ github.event.inputs.destination }}
+            
+            ${{ steps.checklist.outputs.checklist }}
+            
+            {{ steps.destination_weather.outputs.dest_temp }}°C" != "" }}
+            *Погода в ${{ github.event.inputs.destination }} сейчас:*
+            • Температура: ${{ steps.destination_weather.outputs.dest_temp }}°C
+            • Условия: ${{ steps.destination_weather.outputs.dest_conditions }}
+            • Влажность: ${{ steps.destination_weather.outputs.dest_humidity }}%
+            {{ end }}
+            
+            *Не забудьте:*
+            • Сообщить родным о поездке
+            • Проверить срок действия документов
+            • Сделать страховку
+            
+            Хорошей подготовки! 🚀
+          parse_mode: markdown
