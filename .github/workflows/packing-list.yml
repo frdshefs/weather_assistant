@@ -267,16 +267,3 @@ jobs:
             Удачной упаковки! 🎒✨
           parse_mode: markdown
 
-      - name: Сохраняем список в файл
-        if: steps.generate_list.outputs.packing_list != ''
-        run: |
-          # Создаем текстовый файл
-          FILENAME="packing_list_${{ steps.generate_list.outputs.trip_type }}_$(date +%Y%m%d).txt"
-          echo -e "${{ steps.generate_list.outputs.packing_list }}" > $FILENAME
-          
-          # Коммитим
-          git config --global user.email "github-actions@github.com"
-          git config --global user.name "GitHub Actions"
-          git add $FILENAME
-          git commit -m "Добавлен список вещей для ${{ steps.generate_list.outputs.trip_type }}"
-          git push
