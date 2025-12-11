@@ -22,7 +22,7 @@ on:
         description: 'Пункт назначения (для прогноза погоды)'
         required: false
         type: string
-        default: 'казань'
+        default: 'Kazan'
       has_checklist:
         description: 'Добавить чеклист для отметок?'
         required: false
@@ -36,6 +36,11 @@ jobs:
       - name: Загружаем код
         uses: actions/checkout@v4
 
+      - name: Устанавливаем необходимые утилиты
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc curl
+
       - name: Получаем прогноз погоды для пункта назначения
         if: ${{ github.event.inputs.destination != '' }}
         id: weather_forecast
@@ -45,32 +50,98 @@ jobs:
           DESTINATION="${{ github.event.inputs.destination }}"
           DAYS="${{ github.event.inputs.days }}"
           
-          # Получаем прогноз на количество дней поездки
-          RESPONSE=$(curl -s "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/$DESTINATION/$DAYS?unitGroup=metric&include=days&key=$VC_API_KEY&contentType=json&lang=ru")
+          # Рассчитываем даты начала и окончания
+          START_DATE=$(date +%Y-%m-%d)
+          END_DATE=$(date -d "+$((DAYS-1)) days" +%Y-%m-%d)
           
-          # Анализируем погоду на весь период
-          MIN_TEMP=$(echo "$RESPONSE" | jq '[.days[].tempmin] | min')
-          MAX_TEMP=$(echo "$RESPONSE" | jq '[.days[].tempmax] | max')
-          AVG_TEMP=$(echo "$RESPONSE" | jq '[.days[].temp] | add / length | round')
+          # Формируем URL запроса с правильным форматом дат
+          REQUEST_URL="https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${DESTINATION}/${START_DATE}/${END_DATE}?unitGroup=metric&include=days&key=${VC_API_KEY}&contentType=json&lang=ru"
           
-          # Проверяем наличие осадков
-          HAS_RAIN=$(echo "$RESPONSE" | jq '[.days[].preciptype] | any(. != null and contains("rain"))')
-          HAS_SNOW=$(echo "$RESPONSE" | jq '[.days[].preciptype] | any(. != null and contains("snow"))')
+          echo "Запрашиваем прогноз для: ${DESTINATION}"
+          echo "Период: ${START_DATE} - ${END_DATE} (${DAYS} дней)"
+          echo "URL запроса: ${REQUEST_URL//${VC_API_KEY}/***}"
           
-          echo "min_temp=$MIN_TEMP" >> $GITHUB_OUTPUT
-          echo "max_temp=$MAX_TEMP" >> $GITHUB_OUTPUT
-          echo "avg_temp=$AVG_TEMP" >> $GITHUB_OUTPUT
-          echo "has_rain=$HAS_RAIN" >> $GITHUB_OUTPUT
-          echo "has_snow=$HAS_SNOW" >> $GITHUB_OUTPUT
-          echo "destination=$DESTINATION" >> $GITHUB_OUTPUT
+          # Делаем запрос к API
+          API_RESPONSE=$(curl -s -w "\n%{http_code}" "$REQUEST_URL")
+          HTTP_CODE=$(echo "$API_RESPONSE" | tail -n1)
+          RESPONSE_BODY=$(echo "$API_RESPONSE" | sed '$d')
+          
+          # Проверяем успешность запроса
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Запрос к API успешен"
+            
+            # Проверяем, что ответ содержит данные
+            if echo "$RESPONSE_BODY" | jq -e .days >/dev/null 2>&1; then
+              # Анализируем погоду на весь период
+              MIN_TEMP=$(echo "$RESPONSE_BODY" | jq '[.days[].tempmin] | min')
+              MAX_TEMP=$(echo "$RESPONSE_BODY" | jq '[.days[].tempmax] | max')
+              AVG_TEMP=$(echo "$RESPONSE_BODY" | jq '[.days[].temp] | add / length | round')
+              
+              # Проверяем наличие осадков
+              HAS_RAIN=$(echo "$RESPONSE_BODY" | jq '[.days[].preciptype] | map(select(. != null)) | flatten | any(contains("rain"))')
+              HAS_SNOW=$(echo "$RESPONSE_BODY" | jq '[.days[].preciptype] | map(select(. != null)) | flatten | any(contains("snow"))')
+              
+              echo "min_temp=${MIN_TEMP}" >> $GITHUB_OUTPUT
+              echo "max_temp=${MAX_TEMP}" >> $GITHUB_OUTPUT
+              echo "avg_temp=${AVG_TEMP}" >> $GITHUB_OUTPUT
+              echo "has_rain=${HAS_RAIN}" >> $GITHUB_OUTPUT
+              echo "has_snow=${HAS_SNOW}" >> $GITHUB_OUTPUT
+              echo "destination=${DESTINATION}" >> $GITHUB_OUTPUT
+              echo "forecast_success=true" >> $GITHUB_OUTPUT
+              
+              echo "Температура: min=${MIN_TEMP}°C, max=${MAX_TEMP}°C, avg=${AVG_TEMP}°C"
+              echo "Осадки: дождь=${HAS_RAIN}, снег=${HAS_SNOW}"
+            else
+              echo "⚠️ Получен некорректный JSON-ответ от API"
+              echo "Ответ: ${RESPONSE_BODY:0:500}"
+              echo "forecast_success=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Ошибка API. HTTP код: ${HTTP_CODE}"
+            echo "Ответ сервера: ${RESPONSE_BODY:0:500}"
+            echo "forecast_success=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Генерируем список вещей
         id: generate_list
         run: |
           TRIP_TYPE="${{ github.event.inputs.trip_type }}"
           DAYS="${{ github.event.inputs.days }}"
-          MIN_TEMP="${{ steps.weather_forecast.outputs.min_temp }}"
-          MAX_TEMP="${{ steps.weather_forecast.outputs.max_temp }}"
+          
+          # Проверяем наличие данных о погоде
+          if [ "${{ steps.weather_forecast.outputs.forecast_success }}" = "true" ]; then
+            MIN_TEMP="${{ steps.weather_forecast.outputs.min_temp }}"
+            MAX_TEMP="${{ steps.weather_forecast.outputs.max_temp }}"
+            HAS_RAIN="${{ steps.weather_forecast.outputs.has_rain }}"
+            HAS_SNOW="${{ steps.weather_forecast.outputs.has_snow }}"
+            DESTINATION="${{ steps.weather_forecast.outputs.destination }}"
+            
+            # Рекомендации по погоде
+            CLOTHING_TIPS="*ПОГОДА В ${DESTINATION}:*\n"
+            CLOTHING_TIPS+="• Мин. темп.: ${MIN_TEMP}°C\n"
+            CLOTHING_TIPS+="• Макс. темп.: ${MAX_TEMP}°C\n\n"
+            
+            # Определяем температурный режим
+            if (( $(echo "$MAX_TEMP >= 25" | bc -l) )); then
+              CLOTHING_TIPS+="*Рекомендации:*\n• Легкая одежда (шорты, футболки)\n• Головной убор\n• Солнцезащитные очки\n• Крем от загара\n"
+            elif (( $(echo "$MIN_TEMP < 10" | bc -l) )); then
+              CLOTHING_TIPS+="*Рекомендации:*\n• Теплая куртка\n• Свитер/кофта\n• Термобелье\n• Шапка, шарф, перчатки\n"
+            else
+              CLOTHING_TIPS+="*Рекомендации:*\n• Джинсы/брюки\n• Свитер/кофта\n• Ветровка\n• Удобная обувь\n"
+            fi
+            
+            # Рекомендации по осадкам
+            if [ "$HAS_RAIN" = "true" ]; then
+              CLOTHING_TIPS+="• Дождевик или зонт\n• Водонепроницаемая обувь\n"
+            fi
+            if [ "$HAS_SNOW" = "true" ]; then
+              CLOTHING_TIPS+="• Теплая зимняя обувь\n• Непромокаемые перчатки\n"
+            fi
+            
+            WEATHER_INFO="${CLOTHING_TIPS}"
+          else
+            WEATHER_INFO="*Прогноз погоды временно недоступен*\nРекомендуем проверить погоду самостоятельно перед поездкой.\n\n"
+          fi
           
           # Базовые вещи для всех поездок
           BASE_ITEMS="*БАЗОВЫЕ ВЕЩИ:*\n"
@@ -81,33 +152,7 @@ jobs:
           BASE_ITEMS+="• Гигиенические принадлежности\n"
           BASE_ITEMS+="• Влажные салфетки\n"
           
-          # Добавляем рекомендации по одежде в зависимости от температуры
-          CLOTHING_TIPS=""
-          if [ ! -z "$MIN_TEMP" ] && [ ! -z "$MAX_TEMP" ]; then
-            CLOTHING_TIPS="*ПОГОДА В ${{ steps.weather_forecast.outputs.destination }}:*\n"
-            CLOTHING_TIPS+="• Мин. темп.: ${MIN_TEMP}°C\n"
-            CLOTHING_TIPS+="• Макс. темп.: ${MAX_TEMP}°C\n\n"
-            
-            # Рекомендации по одежде
-            if (( $(echo "$MAX_TEMP >= 25" | bc -l) )); then
-              CLOTHING_TIPS+="*Рекомендации:*\n• Легкая одежда (шорты, футболки)\n• Головной убор\n• Солнцезащитные очки\n• Крем от загара\n"
-            elif (( $(echo "$MIN_TEMP < 10" | bc -l) )); then
-              CLOTHING_TIPS+="*Рекомендации:*\n• Теплая куртка\n• Свитер/кофта\n• Термобелье\n• Шапка, шарф, перчатки\n"
-            else
-              CLOTHING_TIPS+="*Рекомендации:*\n• Джинсы/брюки\n• Свитер/кофта\n• Ветровка\n• Удобная обувь\n"
-            fi
-            
-            # Добавляем рекомендации по осадкам
-            if [ "${{ steps.weather_forecast.outputs.has_rain }}" = "true" ]; then
-              CLOTHING_TIPS+="• Дождевик или зонт\n• Водонепроницаемая обувь\n"
-            fi
-            if [ "${{ steps.weather_forecast.outputs.has_snow }}" = "true" ]; then
-              CLOTHING_TIPS+="• Теплая зимняя обувь\n• Непромокаемые перчатки\n"
-            fi
-          fi
-          
           # Вещи в зависимости от типа поездки
-          SPECIFIC_ITEMS=""
           case $TRIP_TYPE in
             "пляжный отдых")
               SPECIFIC_ITEMS="*ДЛЯ ПЛЯЖНОГО ОТДЫХА:*\n"
@@ -181,13 +226,10 @@ jobs:
           FINAL_LIST+="Длительность: $DAYS дней\n"
           FINAL_LIST+="Дата: $(date +"%d.%m.%Y")\n\n"
           
-          if [ ! -z "$CLOTHING_TIPS" ]; then
-            FINAL_LIST+="$CLOTHING_TIPS\n"
-          fi
-          
-          FINAL_LIST+="$BASE_ITEMS\n"
-          FINAL_LIST+="$SPECIFIC_ITEMS\n"
-          FINAL_LIST+="$CLOTHING_COUNT"
+          FINAL_LIST+="${WEATHER_INFO}\n"
+          FINAL_LIST+="${BASE_ITEMS}\n"
+          FINAL_LIST+="${SPECIFIC_ITEMS}\n"
+          FINAL_LIST+="${CLOTHING_COUNT}"
           
           # Добавляем чеклист если нужно
           if [ "${{ github.event.inputs.has_checklist }}" = "true" ]; then
@@ -207,6 +249,7 @@ jobs:
           echo "days=$DAYS" >> $GITHUB_OUTPUT
 
       - name: Отправляем список вещей в Telegram
+        if: steps.generate_list.outputs.packing_list != ''
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -225,6 +268,7 @@ jobs:
           parse_mode: markdown
 
       - name: Сохраняем список в файл
+        if: steps.generate_list.outputs.packing_list != ''
         run: |
           # Создаем текстовый файл
           FILENAME="packing_list_${{ steps.generate_list.outputs.trip_type }}_$(date +%Y%m%d).txt"
